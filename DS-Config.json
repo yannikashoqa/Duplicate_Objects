@@ -1,5 +1,5 @@
 {
-    "MANAGER": "ds.home.kashoqa.com",
+    "MANAGER": "dsm.localdomain.com",
     "PORT"   : "4119",
     "APIKEY" : "",
     "PREFIX" : "Lab_"

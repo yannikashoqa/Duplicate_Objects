@@ -1,4 +1,4 @@
-#  Version 1.0
+#  Version 1.5
 Function Duplicate_Object {
     param ( [Parameter(Mandatory = $true)]    $Object_URI,
         [Parameter(Mandatory = $true)]    $Object_ID,
@@ -28,8 +28,9 @@ Function Duplicate_Object {
     }
     catch {
         Write-Host "[ERROR]	Failed to retreive $Object_URI_Path Object.	$_"
-        exit    # Exit Script
-    }
+        exit
+    }    
+
     $ExistingName = $CurrentObject.name
     if ($ExistingName.StartsWith($PreFix)) {
         Return $CurrentObject  
@@ -50,6 +51,7 @@ Function Duplicate_Object {
                 stringValue = $NewName
             }
         }
+
         Switch ($Object_API_Path) {
             antimalwareconfigurations {
                 $Object_API_Path = "antimalwareconfigurations"
@@ -66,25 +68,26 @@ Function Duplicate_Object {
             fileextensionlists { 
                 $Object_API_Path = "fileextensionlists"
             }  
-        }
+        }  
+
         $QUERY_PARAMS = $QUERY_PARAMS | ConvertTo-Json -Depth 4
         $SearchedObject = Invoke-RestMethod -Uri $SearchObject_URI -Method Post -Headers $Headers -Body $QUERY_PARAMS -SkipCertificateCheck 
         $SearchedObject_Name = $SearchedObject.$Object_API_Path.name
-
         if ($NewName -eq $SearchedObject_Name) {
             Return $SearchedObject.$Object_API_Path
         }
         Else {
-            #Write-Host "[INFO] Object $SearchedObject_Name does not exist. Continue with script" #Not Needed
+            Write-Host "[INFO] Object $SearchedObject_Name does not exist. Continue with script" #Not Needed
         }                    
     }
     catch {
         Write-Host "[ERROR] Failed to run Search. $_"
     }
+
     try {
         $CreateObjectURI = $DS_HOST_URI + $Object_URI_Path
         $ObjectItem_Duplicate = Invoke-RestMethod -Uri $CreateObjectURI -Method Post -Headers $Headers -Body $NewObject_JSON -SkipCertificateCheck 
-        Write-Host "[INFO] Object Creation Successful: $CurrentObject.name"
+        Write-Host "[INFO] Object Creation Successful: " $CurrentObject.name
         Return $ObjectItem_Duplicate
     }
     catch {
@@ -94,6 +97,8 @@ Function Duplicate_Object {
 
 Function ProcessAMConfiguration{
     param ( [Parameter(Mandatory = $true)]    $AM_Configuration_Name)
+    Write-Host ""
+    Write-Host "====================================================="
     Write-Host "[INFO] Processing $AM_Configuration_Name"
     Switch ($AM_Configuration_Name) {
         realTimeScanConfiguration { 
@@ -108,94 +113,128 @@ Function ProcessAMConfiguration{
             $ScanConfigurationID =$Policy.antiMalware.scheduledScanConfigurationID
             $ScanConfigurationID_Text = "scheduledScanConfigurationID"
         }
-    } 
-
-    ################################################## DEV: Even if 0 and exit function, writing the policy will enable 
-    ################################################## the Inhereted option on the Scan Configuration
-    if ($ScanConfigurationID -eq 0){
-        Return
     }
 
     $ScanConfigurations_URI = $DS_HOST_URI + "antimalwareconfigurations"
-    $ScanConfiguration_URI = $ScanConfigurations_URI + "/" + $ScanConfigurationID 
-
-    #Duplicate the Scan Configuration    
     try {
         $Duplicate_ScanConfig = Duplicate_Object -Object_URI $ScanConfigurations_URI -Object_ID $ScanConfigurationID -Object_API_Path "antimalwareconfigurations"
-        $ScanConfiguration_URI = $ScanConfigurations_URI + "/" + $Duplicate_ScanConfig.ID
-        $ScanConfiguration_Describe = Invoke-RestMethod -Uri $ScanConfiguration_URI -Method Get -Headers $Headers -SkipCertificateCheck 
+        $Duplicate_ScanConfiguration_URI = $ScanConfigurations_URI + "/" + $Duplicate_ScanConfig.ID
+        $ScanConfiguration_Describe = Invoke-RestMethod -Uri $Duplicate_ScanConfiguration_URI -Method Get -Headers $Headers -SkipCertificateCheck 
     }
     catch {
         Write-Host "[ERROR] Failed to retreive the Scan Configuration"
-    }      
-    
+    }
+
     $ObjectsToModify = @("directorylists", "filelists", "fileextensionlists", "processimage")
     ForEach ($Object in $ObjectsToModify) {
+        $Skip = $false
         switch ($Object) {
-            directorylists { $ExclusionListID = $ScanConfiguration_Describe.excludedDirectoryListID}
-            filelists { $ExclusionListID = $ScanConfiguration_Describe.excludedFileListID}
-            fileextensionlists { $ExclusionListID = $ScanConfiguration_Describe.excludedFileExtensionListID} 
-            processimage { 
-                $ScanConfigurationType = $ScanConfiguration_Describe.scanType
-                If ($ScanConfigurationType -eq "real-time"){
-                    $ExclusionListID = $ScanConfiguration_Describe.excludedProcessImageFileListID}
-                }Else{
-                    $ExclusionListID = $null    #Skip since on-demand scan configuration does not have Process Image exclusions
-                }                
-        }
-        if ($null -eq $ExclusionListID){
-            Continue
-        }
-        $ExclusionList_URI = $DS_HOST_URI + $Object
-        $Duplicate_Exclusion = Duplicate_Object -Object_URI $ExclusionList_URI -Object_ID $ExclusionListID -Object_API_Path $Object
-        
-        #Update Duplicate Scan Configuration with Exclusion ID
-        Switch ($Object) {
             directorylists { 
-                $Body = @{
-                    "excludedDirectoryListID" = $Duplicate_Exclusion.ID
-                }                    
-            }
-            filelists { 
-                $Body = @{
-                    "excludedFileListID" = $Duplicate_Exclusion.ID
-                }                    
-            }
-            processimage { 
-                $Body = @{
-                    "excludedProcessImageFileListID" = $Duplicate_Exclusion.ID
-                }                    
-            }
-            fileextensionlists { 
-                $Body = @{
-                    "excludedFileExtensionListID" = $Duplicate_Exclusion.ID
-                }                    
-            }  
-        }            
-        
-        $Body_Json = $Body | ConvertTo-Json -Depth 4
-        $Modify_AM_ScanConfig_URI = $ScanConfigurations_URI + "/" + $Duplicate_ScanConfig.ID
-        # Update Scan Configuration
-        try {                
-            $Modify_AM_ScanConfig = Invoke-RestMethod -Uri $Modify_AM_ScanConfig_URI -Method Post -Headers $Headers -Body $Body_Json -SkipCertificateCheck 
-            $PolicySettingValue = $Modify_AM_ScanConfig.ID
-            $PolicySettingPayload = @{
-                "antiMalware" = @{
-                    $ScanConfigurationID_Text = $PolicySettingValue
+                if (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedDirectoryListID")){
+                    $ExclusionListID = $ScanConfiguration_Describe.excludedDirectoryListID
+                    $ExclusionList_URI = $DS_HOST_URI + $Object
+                    $Duplicate_Exclusion = Duplicate_Object -Object_URI $ExclusionList_URI -Object_ID $ExclusionListID -Object_API_Path $Object
+                    $Body = @{
+                        "excludedDirectoryListID" = $Duplicate_Exclusion.ID
+                    } 
+                }Else{
+                    Write-Host "[INFO] excludedDirectoryListID Does not Exist"
+                    $Skip = $True
                 }
             }
-            $PolicySettingBody = $PolicySettingPayload | ConvertTo-Json -Depth 4
+            filelists { 
+                if (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedFileListID")){
+                    $ExclusionListID = $ScanConfiguration_Describe.excludedFileListID
+                    $ExclusionList_URI = $DS_HOST_URI + $Object
+                    $Duplicate_Exclusion = Duplicate_Object -Object_URI $ExclusionList_URI -Object_ID $ExclusionListID -Object_API_Path $Object
+                    $Body = @{
+                        "excludedFileListID" = $Duplicate_Exclusion.ID
+                    }  
+                }Else{
+                    Write-Host "[INFO] excludedFileListID Does not Exist"
+                    $Skip = $True
+                }              
+            }
+            fileextensionlists { 
+                if (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedFileExtensionListID")){
+                    $ExclusionListID = $ScanConfiguration_Describe.excludedFileExtensionListID
+                    $ExclusionList_URI = $DS_HOST_URI + $Object
+                    $Duplicate_Exclusion = Duplicate_Object -Object_URI $ExclusionList_URI -Object_ID $ExclusionListID -Object_API_Path $Object
+                    $Body = @{
+                        "excludedFileExtensionListID" = $Duplicate_Exclusion.ID
+                    } 
+                }Else{
+                    Write-Host "[INFO] excludedFileExtensionListID Does not Exist"
+                    $Skip = $True
+                }              
+            } 
+            processimage { 
+                $ScanConfigurationType = $ScanConfiguration_Describe.scanType
+                if (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedProcessImageFileListID")){
+                    If ($ScanConfigurationType -eq "real-time"){                    
+                        $ExclusionListID = $ScanConfiguration_Describe.excludedProcessImageFileListID
+                        $ExclusionList_URI = $DS_HOST_URI + "filelists"
+                        $Duplicate_Exclusion = Duplicate_Object -Object_URI $ExclusionList_URI -Object_ID $ExclusionListID -Object_API_Path "filelists"
+                        $Body = @{
+                            "excludedProcessImageFileListID" = $Duplicate_Exclusion.ID
+                        } 
+                    }
+                }else {
+                    Write-Host "[INFO] excludedProcessImageFileListID Does not Exist"
+                    $Skip = $True
+                }                
+            }            
         }
-        catch {
-            Write-Host "[ERROR]	Failed to update Security Config Setting.	$_"
-        }
-        # Update the Policy
-        try {
-            $PolicySettingToUpdate_URI = $Policies_URI + "/" + $Policy.ID
-            $PolicySettingUpdate = Invoke-RestMethod -Uri $PolicySettingToUpdate_URI -Method Post -Headers $Headers -Body $PolicySettingBody -SkipCertificateCheck     
-        }
-        catch {
-            Write-Host "[ERROR]	Failed to update Policy Setting.	$_"
+
+        # For Realtime Scan Configuration check if all Exclusions are disabled
+        If ($ScanConfiguration_Describe.scanType -eq "real-time" -and
+            -not (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedDirectoryListID")) -and`
+            -not (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedFileListID")) -and`
+            -not (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedFileExtensionListID")) -and`
+            -not (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedProcessImageFileListID")) ){        
+                #Blank Body
+                $Body = @{
+                } 
+                $AllDisabled = $true
+            }
+
+        # For OnDemand Scan Configuration there is not Process Image Exclusions
+        If ($ScanConfiguration_Describe.scanType -eq "on-demand" -and
+            -not (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedDirectoryListID")) -and`
+            -not (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedFileListID")) -and`
+            -not (($ScanConfiguration_Describe | ConvertTo-Json).Contains("excludedFileExtensionListID"))){        
+                #Blank Body
+                $Body = @{
+                } 
+                $AllDisabled = $true
+            }
+
+        If ($Skip -and !$AllDisabled){
+            Write-Host "[INFO] Skipping Exclusion List ($Object) since it is not enabled."
+        }else {
+            $Body_Json = $Body | ConvertTo-Json -Depth 4
+            # Update Scan Configuration
+            try {                
+                $Updated_AM_ScanConfig = Invoke-RestMethod -Uri $Duplicate_ScanConfiguration_URI -Method Post -Headers $Headers -Body $Body_Json -SkipCertificateCheck 
+                $PolicySettingValue = $Updated_AM_ScanConfig.ID
+                $PolicySettingPayload = @{
+                    "antiMalware" = @{
+                        $ScanConfigurationID_Text = $PolicySettingValue
+                    }
+                }
+                $PolicySettingBody = $PolicySettingPayload | ConvertTo-Json -Depth 4
+            }
+            catch {
+                Write-Host "[ERROR]	Failed to update Security Config Setting.	$_"
+            }
+            # Update the Policy
+            try {
+                $PolicySettingToUpdate_URI = $Policies_URI + "/" + $Policy.ID
+                $UpdatedPolicy = Invoke-RestMethod -Uri $PolicySettingToUpdate_URI -Method Post -Headers $Headers -Body $PolicySettingBody -SkipCertificateCheck 
+            }
+            catch {
+                Write-Host "[ERROR]	Failed to update Policy Setting.	$_"
+            }
         }
     }
 }
@@ -218,6 +257,7 @@ $headers.Add("api-version", 'v1')
 $headers.Add("Content-Type", 'application/json')
 
 $DS_HOST_URI = "https://" + $Manager + ":" + $PORT + "/api/"
+
 $PoliciesAPIPath = "policies"
 $Policies_URI = $DS_HOST_URI + $PoliciesAPIPath
 
@@ -227,15 +267,10 @@ try {
     }
     catch {
         Write-Host "[ERROR] Failed to retreive the Policies"
-    }    
+    }
+    
     $PolicyList = $Policy_REST.$PoliciesAPIPath
     ForEach ($Policy in $PolicyList) {
-        If ($Policy.name -eq "Base Policy") {
-            Continue
-        }
-        If ($Policy.antiMalware.state -eq "off") {
-            Continue
-        }
         Write-Host "################################  Policy Section  ################################"
         Write-Host "Policy Name: " $Policy.name
         ProcessAMConfiguration -AM_Configuration_Name "realTimeScanConfiguration"

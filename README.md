@@ -2,7 +2,7 @@
 
 AUTHOR		: Yanni Kashoqa
 
-TITLE		: Duplicate eep Security Policy AntiMalware Configurations
+TITLE		: Duplicate Deep Security Policy AntiMalware Configurations
 
 DESCRIPTION	: This Powershell script will duplicate all scan configurations used by Deep Security policies in addition to any Exclustion Lists used in these Scan Configurations.
 

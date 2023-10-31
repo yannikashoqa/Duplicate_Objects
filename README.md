@@ -17,6 +17,7 @@ NOTES
 - If in the Scan Configuration Inherited is disabled and there is no Exclution configuration selected the script will enable Inherited on the Scan Configuration for that Exclusionn List.
 - Ignore Reconnaissance does not get migrated using the migration tool
 - Script does not duplicate Inclusion Directories and Files in the Scan Configuration.
+- If IPS is enabled, make sure that the port list "Web Server Common" on both environments have the same entries to avoid the warning "Application Type Port List Misconfiguration".
 
 REQUIRMENTS
 - PowerShell 7+ Core
